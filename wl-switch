@@ -1,0 +1,166 @@
+#!/bin/bash
+#######################################################
+# Description:                                        #
+#   bash script to list and focus windows             #
+#   via yad list UI                                   #
+#######################################################
+
+
+ERR(){ echo "ERROR: $1" 1>&2; }
+
+declare -i DEPCOUNT=0
+for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs} /bin/{rm,echo,sed}; {
+	[ -x "$DEP" ] || {
+		ERR "$LINENO Dependency '$DEP' not met."
+		DEPCOUNT+=1
+	}
+}
+[ $DEPCOUNT -eq 0 ] || exit 1
+
+# Ensure only one instance of this scipt can start
+[[ $(pgrep -c $(basename $0)) -ne 1 ]] && ERR "$LINENO Only one instance can run." && exit 1
+
+# Check if thre are windows 
+(wmctrl -l | while read -a A; do
+           case "${A[1]}" in
+                -1) continue;;
+                 0|1) false && exit;;
+            esac
+            done)
+
+[[ $? -eq 0 ]] && exit 0
+
+#######################################################
+# Note:                                               #
+# to show the icon for the "zathura" application      #
+# create a config file ~/.config/zathura/zathurarc    #
+# with contents: set window-icon /path/to/zathura.png #
+# there is a manual page for zathurarc: man zathurarc #
+#######################################################
+
+# Activation method can be select or dclick
+# select - focus window on selection
+# dclick - focus window on double-click
+ACTION=select
+
+gtkIcons=$(gsettings get org.mate.interface icon-theme)
+gtkIcons=${gtkIcons//"'"}
+#if type -p xfconf-query >/dev/null 2>&1; then
+#   gtkIcons=$(xfconf-query -c xsettings -p /Net/IconThemeName)
+#fi
+
+# Temp dir to store the icons
+TMPDIR=~/Desktop/wlist-icons/$gtkIcons
+if [[ ! -d $TMPDIR ]]
+then
+   mkdir -p $TMPDIR
+fi
+
+# Get active window id
+ACTIVE_WIN_ID=$(xprop -root 32x '\t$0' _NET_ACTIVE_WINDOW | awk '{print $2}')
+
+# With process substitution output from "wmctrl -l" is redirected to file descriptor 3
+# while loop reads  "win_id" and "display" variables from file descriptor 3
+while read -r win_id display app text <&3
+  do
+     # Skip sticky windows with display id -1
+     [[ "$display" -eq "-1" ]] && continue
+
+     # filter windows with win_id that has X window properties of type normal or dialog
+     #WINDOW_TYPE="$(xprop -id $win_id _NET_WM_WINDOW_TYPE 2>/dev/null)"
+     #case "$WINDOW_TYPE" in
+     #     "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL") : ;;
+     #     "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG") : ;;
+     #      *) continue ;;
+     #esac
+
+         # Get WM_CLASS X window property
+         wm_class="$(xprop -id $win_id WM_CLASS | awk -F'"' '{print tolower($4)}')"
+
+        if [[ ! -f $TMPDIR/$wm_class.png ]]
+             then
+                 #Convert icon to pam then use imagemagick to convert to png and resize
+                 xprop -notype 32c -id $win_id _NET_WM_ICON \
+                       |    perl -0777 -pe '@_=/\d+/g;
+                       printf "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", splice@_,0,2;
+                       $_=pack "N*", @_;
+                       s/(.)(...)/$2$1/gs' \
+                       | convert pam:- -resize 16x16 $TMPDIR/$wm_class.png  2>/dev/null
+                  if [[ $? -ne 0 ]] && [[ ! -f "$TMPDIR/$wm_class" ]]
+                  then
+                      NET_NAME=$(xprop -id $win_id _NET_WM_NAME | awk -F '"' '{print $2}')
+                      echo "$NET_NAME" > "$TMPDIR/$wm_class"
+                  fi
+         fi
+         # Extract the application name from string
+         app="${app##*'.'}"
+
+         # make active window row bold
+         if [[ "$win_id" -eq "$ACTIVE_WIN_ID" ]]
+         then
+             #display="<b>$display</b>"
+             app="<b>$app</b>"
+             text="<b>$text</b>"
+         fi
+
+         # if WM_CLASS is a "Wrapper"
+         if [[ "${wm_class}" == "Wrapper" ]]
+         then
+             # Get WM_CLASS X window property _NET_WM_NAME
+
+             wm_class=$(xprop -id $win_id _NET_WM_NAME | awk -F '"' '{print $2}')
+             # print to yad columns
+             if [[ "$wm_class" -ne "" ]]
+             then
+                 echo "$wm_class"
+             else
+                 echo "xfwm4"
+             fi
+             echo "$win_id"                        # We use this one for select-action (hidden column)
+             echo "$text" | sed "s/\&/\&amp;/g"    # escape ampersand
+             echo "$display ${wm_class}" | sed "s/\&/\&amp;/g"
+         else
+             if [[ -f $TMPDIR/$wm_class.png  ]]
+               then
+                  echo "$TMPDIR/$wm_class.png"
+             elif [[ -s "$TMPDIR/$wm_class" ]]
+                then
+                 cat "$TMPDIR/$wm_class"
+             else 
+                 echo "$wm_class"
+             fi
+             # print to yad columns
+             echo "$win_id"                         # We use this one for select-action (hidden column)
+             echo "$text" | sed "s/\&/\&amp;/g"     # escape ampersand
+             echo "$display ${app}" | sed "s/\&/\&amp;/g"
+         fi
+
+done 3< <(wmctrl -l -x \
+        | awk '{$4="";
+                if($3=="zathura.Zathura")
+                    print $1, $2, substr($0, index($0,$5), 40);
+                else
+                    print $1, $2, $3, substr($0, index($0,$5), 40);}') \
+        | yad --list \
+              --column="icon":IMG \
+              --column="win_id" \
+              --column="title" \
+              --column="display / app" \
+              --width="500" \
+              --height="450" \
+              --hide-column="2" \
+              --$ACTION-action="sh -c \"echo %s | cut -d ' ' -f 2 2>&1 | xargs  xdotool windowactivate -- \"" \
+              --no-buttons  \
+              --search-column=4 \
+              --window-icon="mate-desktop" \
+              --undecorated \
+              --close-on-unfocus \
+              --on-top \
+              --center \
+              --skip-taskbar \
+              --sticky
+
+# Close file descriptor 3
+exec 3<&-
+
+exit 0
