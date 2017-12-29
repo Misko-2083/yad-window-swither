@@ -18,7 +18,7 @@ for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs} /bin/{rm,e
 [ $DEPCOUNT -eq 0 ] || exit 1
 
 # Ensure only one instance of this scipt can start
-[[ $(pgrep -c $(basename $0)) -ne 1 ]] && ERR "$LINENO Only one instance can run." && exit 1
+[[ $(pgrep -c $(basename $0)) -ne 1 ]] && xdotool getwindowfocus windowunmap && exit 1
 
 # Check if thre are windows 
 (wmctrl -l | while read -a A; do
@@ -43,11 +43,16 @@ for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs} /bin/{rm,e
 # dclick - focus window on double-click
 ACTION=select
 
-gtkIcons=$(gsettings get org.mate.interface icon-theme)
-gtkIcons=${gtkIcons//"'"}
-#if type -p xfconf-query >/dev/null 2>&1; then
-#   gtkIcons=$(xfconf-query -c xsettings -p /Net/IconThemeName)
-#fi
+gtkIcons=Default
+
+# Get Icon Theme name Mate desktop
+#gtkIcons=$(gsettings get org.mate.interface icon-theme)
+#gtkIcons=${gtkIcons//"'"}
+
+# Get Icon Theme Name Xfce Desktop
+if type -p xfconf-query >/dev/null 2>&1; then
+   gtkIcons=$(xfconf-query -c xsettings -p /Net/IconThemeName)
+fi
 
 # Temp dir to store the icons
 TMPDIR=~/Desktop/wlist-icons/$gtkIcons
@@ -65,7 +70,7 @@ while read -r win_id display app text <&3
   do
      # Skip sticky windows with display id -1
      [[ "$display" -eq "-1" ]] && continue
-
+     
      # filter windows with win_id that has X window properties of type normal or dialog
      #WINDOW_TYPE="$(xprop -id $win_id _NET_WM_WINDOW_TYPE 2>/dev/null)"
      #case "$WINDOW_TYPE" in
@@ -156,7 +161,7 @@ done 3< <(wmctrl -l -x \
               --undecorated \
               --close-on-unfocus \
               --on-top \
-              --center \
+              --mouse \
               --skip-taskbar \
               --sticky
 
