@@ -5,11 +5,10 @@
 #   via yad list UI                                   #
 #######################################################
 
-
 ERR(){ echo "ERROR: $1" 1>&2; }
 
 declare -i DEPCOUNT=0
-for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs} /bin/{rm,echo,sed}; {
+for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs,iconv} /bin/{rm,echo,sed}; {
 	[ -x "$DEP" ] || {
 		ERR "$LINENO Dependency '$DEP' not met."
 		DEPCOUNT+=1
@@ -18,18 +17,39 @@ for DEP in /usr/bin/{xdotool,perl,wmctrl,yad,convert,xprop,awk,xargs} /bin/{rm,e
 [ $DEPCOUNT -eq 0 ] || exit 1
 
 # Ensure only one instance of this scipt can start
-[[ $(pgrep -c $(basename $0)) -ne 1 ]] && xdotool getwindowfocus windowunmap && exit 1
+if [[ $(pgrep -c $(basename $0)) -ne 1 ]]; then
+   pids="$(xdotool search --class "wlist")"
+   wpid="$(xdotool getwindowfocus)"
 
-# Check if thre are windows 
-(wmctrl -l | while read -a A; do
-           case "${A[1]}" in
-                -1) continue;;
-                 0|1) false && exit;;
-            esac
-            done)
+   for pid in $pids; do
+        # Compares window class pid with the pid of a window in focus
+        if [[ "$pid" == "$wpid" ]]; then
+           xdotool windowunmap $pid
+           exit 1
+        fi
+   done
+fi
 
-[[ $? -eq 0 ]] && exit 0
-
+# Check if there are windows present
+wmctrl -l | while read -a A; do
+             if [[ "${A[1]}" -eq "0" ]];then
+                exit 1
+             elif [[ "${A[1]}" -eq "1" ]];then
+                exit 1
+             fi
+           done
+if [[ "$?" -eq 0 ]]; then
+              yad --text="Window list:\nNo windows to show." \
+              --no-buttons \
+              --undecorated \
+              --close-on-unfocus \
+              --on-top \
+              --skip-taskbar \
+              --mouse \
+              --sticky \
+              --class="wlist"
+    exit 0
+fi
 #######################################################
 # Note:                                               #
 # to show the icon for the "zathura" application      #
@@ -50,11 +70,12 @@ gtkIcons=Default
 #gtkIcons=${gtkIcons//"'"}
 
 # Get Icon Theme Name Xfce Desktop
-if type -p xfconf-query >/dev/null 2>&1; then
-   gtkIcons=$(xfconf-query -c xsettings -p /Net/IconThemeName)
-fi
+gtkIcons=$(xfconf-query -c xsettings -p /Net/IconThemeName)
 
-# Temp dir to store the icons
+# Get icon theme bunsen hidrogen
+#gtkIcons="$(awk -F'"' '/^gtk-icon-theme-name/{print $2}' ~/.gtkrc-2.0)"
+
+# Temp dir to store the icon cache
 TMPDIR=~/Desktop/wlist-icons/$gtkIcons
 if [[ ! -d $TMPDIR ]]
 then
@@ -71,14 +92,6 @@ while read -r win_id display app text <&3
      # Skip sticky windows with display id -1
      [[ "$display" -eq "-1" ]] && continue
      
-     # filter windows with win_id that has X window properties of type normal or dialog
-     #WINDOW_TYPE="$(xprop -id $win_id _NET_WM_WINDOW_TYPE 2>/dev/null)"
-     #case "$WINDOW_TYPE" in
-     #     "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL") : ;;
-     #     "_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_DIALOG") : ;;
-     #      *) continue ;;
-     #esac
-
          # Get WM_CLASS X window property
          wm_class="$(xprop -id $win_id WM_CLASS | awk -F'"' '{print tolower($4)}')"
 
@@ -97,6 +110,7 @@ while read -r win_id display app text <&3
                       echo "$NET_NAME" > "$TMPDIR/$wm_class"
                   fi
          fi
+
          # Extract the application name from string
          app="${app##*'.'}"
 
@@ -112,8 +126,8 @@ while read -r win_id display app text <&3
          if [[ "${wm_class}" == "Wrapper" ]]
          then
              # Get WM_CLASS X window property _NET_WM_NAME
-
              wm_class=$(xprop -id $win_id _NET_WM_NAME | awk -F '"' '{print $2}')
+
              # print to yad columns
              if [[ "$wm_class" -ne "" ]]
              then
@@ -121,8 +135,9 @@ while read -r win_id display app text <&3
              else
                  echo "xfwm4"
              fi
-             echo "$win_id"                        # We use this one for select-action (hidden column)
-             echo "$text" | sed "s/\&/\&amp;/g"    # escape ampersand
+             echo "$win_id"                         # We use this one for select-action (hidden column)
+             echo "$text" | sed "s/\&/\&amp;/g" |   # escape ampersand
+             iconv -c -t UTF-8                      # convert characters to utf-8
              echo "$display ${wm_class}" | sed "s/\&/\&amp;/g"
          else
              if [[ -f $TMPDIR/$wm_class.png  ]]
@@ -136,7 +151,8 @@ while read -r win_id display app text <&3
              fi
              # print to yad columns
              echo "$win_id"                         # We use this one for select-action (hidden column)
-             echo "$text" | sed "s/\&/\&amp;/g"     # escape ampersand
+             echo "$text" | sed "s/\&/\&amp;/g" |   # escape ampersand
+             iconv -c -t UTF-8                      # convert characters to utf-8
              echo "$display ${app}" | sed "s/\&/\&amp;/g"
          fi
 
@@ -147,6 +163,7 @@ done 3< <(wmctrl -l -x \
                 else
                     print $1, $2, $3, substr($0, index($0,$5), 40);}') \
         | yad --list \
+              --title="WList" \
               --column="icon":IMG \
               --column="win_id" \
               --column="title" \
@@ -156,14 +173,15 @@ done 3< <(wmctrl -l -x \
               --hide-column="2" \
               --$ACTION-action="sh -c \"echo %s | cut -d ' ' -f 2 2>&1 | xargs  xdotool windowactivate -- \"" \
               --no-buttons  \
-              --search-column=4 \
+              --search-column=3 \
               --window-icon="mate-desktop" \
               --undecorated \
               --close-on-unfocus \
               --on-top \
-              --mouse \
               --skip-taskbar \
-              --sticky
+              --mouse \
+              --sticky \
+              --class="wlist"
 
 # Close file descriptor 3
 exec 3<&-
